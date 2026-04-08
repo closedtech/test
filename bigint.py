@@ -350,7 +350,6 @@ class BigInt:
         b = b_str
         quotient = []
         current = ""
-        b_int = int(b)
 
         for digit in a:
             current += digit
@@ -379,8 +378,6 @@ class BigInt:
         return qi, ri
 
     # ----- Burnikel-Ziegler O(n log n) -----
-    # Base = 1000 (3 decimal digits per word)
-
     @staticmethod
     def _digits_to_base(digits: list[int], base: int = 1000) -> str:
         """Convert little-endian base-{base} digits to decimal string."""
@@ -407,17 +404,18 @@ class BigInt:
         for i in range(0, len(s), 3):
             chunk = s[max(0, i) : i + 3]
             digits.append(int(chunk))
-        # Remove trailing zeros (little-endian, so at the end of list)
         while len(digits) > 1 and digits[-1] == 0:
             digits.pop()
         return digits
 
     def _divide_burnikel(self, a_str: str, b_str: str) -> tuple["BigInt", "BigInt"]:
-        """Burnikel-Ziegler division O(n log n).
-        Splits numbers into base-1000 blocks and recurses with fallbacks.
+        """Burnikel-Ziegler division. Base 1000, recursive with school fallback.
+
+        Key guarantee: at most ONE recursive call per level — no branching explosion.
         """
         n = max(len(a_str), len(b_str))
-        if n < 40:
+        # Base case: use school for small inputs
+        if n < 50:
             return self._divide_school(a_str, b_str)
 
         if int(b_str) == 0:
@@ -432,19 +430,16 @@ class BigInt:
             ri._sign = ""
             return qi, ri
 
-        # For Burnikel-Ziegler to work efficiently, we need |a| >= 2*|b|.
-        # If not, fall back to school division.
+        # Burnikel-Ziegler needs |a| >= 2*|b| for efficiency
         if len(a_str) < 2 * len(b_str):
             return self._divide_school(a_str, b_str)
 
-        # Convert to base 1000 (3 decimal digits per word)
+        # Convert to base 1000
         a_base = self._str_to_base(a_str)
         b_base = self._str_to_base(b_str)
 
         n_a = len(a_base)
         n_b = len(b_base)
-
-        # m = ceil(max(n_a, n_b) / 3)
         m = (max(n_a, n_b) + 2) // 3
         if m < 1:
             m = 1
@@ -456,58 +451,53 @@ class BigInt:
             b_base.append(0)
 
         # Split a = a2*B^(2m) + a1*B^m + a0
-        a0 = a_base[0:m]
-        a1 = a_base[m:2*m]
         a2 = a_base[2*m:3*m]
-
-        # Split b = b2*B^m + b1 (b2 is most significant, may be 0)
-        b0 = b_base[0:m]
-        b1 = b_base[m:2*m]
         b2 = b_base[2*m:3*m]
 
         a2_str = self._digits_to_base(a2).lstrip("0") or "0"
         b2_str = self._digits_to_base(b2).lstrip("0") or "0"
-        b1_str = self._digits_to_base(b1).lstrip("0") or "0"
+        b1_str = self._digits_to_base(b_base[m:2*m]).lstrip("0") or "0"
 
-        # If b's leading word is 0, shift
-        if b2_str == "0":
-            b2_str = b1_str.lstrip("0") or "0"
+        # Handle leading zero word in b
+        if b2_str == "0" or len(b2_str) == 0:
+            b2_str = b1_str
             if b2_str == "0":
                 return self._divide_school(a_str, b_str)
 
-        # Step 1: q1 = floor(a2 / b2), r1 = a - q1*b
+        # Check if recursive division makes sense
         cmp_a2_b2 = (len(a2_str) > len(b2_str)) or (len(a2_str) == len(b2_str) and a2_str >= b2_str)
-        if not cmp_a2_b2:
-            # q1 = 0, r1 = a
-            q1_str = "0"
-            r1_big = BigInt(a_str)
-        else:
-            q1_big, _ = self._divide_burnikel(a2_str, b2_str)
-            q1_str = q1_big._value.lstrip("0") or "0"
-            if q1_str == "0":
-                r1_big = BigInt(a_str)
-            else:
-                a_big = BigInt(a_str)
-                b_big = BigInt(b_str)
-                q1_big_int = BigInt(q1_str)
-                r1_big = a_big - q1_big_int * b_big
+        if not cmp_a2_b2 or len(a2_str) < 2 * len(b2_str):
+            # a2 < b2 or a2 not much bigger: recursion won't reduce enough
+            return self._divide_school(a_str, b_str)
+
+        # Step 1: q1 = floor(a2 / b2), r1 = a - q1*b
+        a_big = BigInt(a_str)
+        b_big = BigInt(b_str)
+        q1_big, _ = self._divide_burnikel(a2_str, b2_str)
+        q1_str = q1_big._value.lstrip("0") or "0"
+
+        if q1_str == "0":
+            return self._divide_school(a_str, b_str)
+
+        q1_big_int = BigInt(q1_str)
+        r1_big = a_big - q1_big_int * b_big
 
         r1_str = r1_big._value.lstrip("0") or "0"
         if r1_str == "":
             r1_str = "0"
 
-        # If r1 didn't shrink enough, fall back to school division for the remainder
+        # If r1 didn't shrink enough, fall back
         if len(r1_str) >= len(a_str):
             return self._divide_school(a_str, b_str)
 
         # Step 2: q2 = floor(r1 / b), r = r1 - q2*b
-        q2_big, r2_big = self._divide_burnikel(r1_str, b_str)
-        q2_str = q2_big._value.lstrip("0") or "0"
+        # Always use school for guaranteed O(1) depth at this level
+        q2_big, r2_big = self._divide_school(r1_str, b_str)
 
         # Final quotient: q = q1*B^m + q2
         B_m = 1000 ** m
-        q1_int = int(q1_str) if q1_str != "0" else 0
-        q2_int = int(q2_str) if q2_str != "0" else 0
+        q1_int = int(q1_str)
+        q2_int = int(q2_big._value.lstrip("0") or "0")
         q_int = q1_int * B_m + q2_int
 
         qi = BigInt.__new__(BigInt)
@@ -520,7 +510,7 @@ class BigInt:
 
     # ----- Barrett reduction O(n log n) -----
     def _divide_barrett(self, a_str: str, b_str: str) -> tuple["BigInt", "BigInt"]:
-        """Barrett reduction division using FFT multiplication.
+        """Barrett reduction division.
         mu = floor(B^(2k) / d), qhat = floor(a_high * mu / B^(k+1)).
         """
         if int(b_str) == 0:
@@ -536,49 +526,37 @@ class BigInt:
             return qi, ri
 
         B = 1000
-        k = (len(b_str) + 2) // 3  # base-B words in divisor
+        k = (len(b_str) + 2) // 3
         if k < 1:
             k = 1
 
-        # mu = floor(B^(2k) / d) -- precompute
-        # B^(2k) = 1000^(2k), compute via Python int
         B_2k = B ** (2 * k)
-
-        # Convert to Python ints for mu calculation and division
         a_int = int(a_str)
         b_int = int(b_str)
         mu_int = B_2k // b_int
 
-        # a_high: top k+1 base-B digits of a
-        # Number of base-B digits in a
         a_base = self._str_to_base(a_str)
         na = len(a_base)
 
         if na <= k + 1:
             a_high_int = a_int // (B ** (max(0, na - k - 1) * 3))
         else:
-            # a_high = floor(a / B^(na - k - 1))
             shift = (na - k - 1)
             a_high_int = a_int // (B ** (shift * 3))
 
-        # qhat = floor(a_high * mu / B^(k+1))
         qhat_int = (a_high_int * mu_int) // (B ** ((k + 1) * 3))
 
-        # Clamp qhat to valid range
-        # q < B^m where m = number of base-B digits in a
         m = na
         max_q = B ** m - 1
         if qhat_int > max_q:
             qhat_int = max_q
 
-        # Refine qhat via correction loop
         q_int = qhat_int
         for _ in range(3):
             qb = q_int * b_int
             if qb > a_int:
                 q_int -= 1
             else:
-                # Check if we can increment
                 while (q_int + 1) * b_int <= a_int:
                     q_int += 1
                 break
