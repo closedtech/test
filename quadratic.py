@@ -1,5 +1,6 @@
 import math
 import cmath
+import argparse
 
 def solve_quadratic(a, b, c):
     """Решает квадратное уравнение ax² + bx + c = 0"""
@@ -11,7 +12,6 @@ def solve_quadratic(a, b, c):
     discriminant = b**2 - 4*a*c
     
     if discriminant < 0:
-        # Комплексные корни
         z1 = (-b + cmath.sqrt(discriminant)) / (2*a)
         z2 = (-b - cmath.sqrt(discriminant)) / (2*a)
         return f"Комплексные корни: x1 = {z1:.4f}, x2 = {z2:.4f}"
@@ -25,12 +25,11 @@ def solve_quadratic(a, b, c):
         return f"Два решения: x1 = {x1:.4f}, x2 = {x2:.4f}"
 
 if __name__ == "__main__":
-    print("=== Решение квадратного уравнения ===")
-    print("Введите коэффициенты a, b, c:")
+    parser = argparse.ArgumentParser(description="Решение квадратного уравнения")
+    parser.add_argument("a", type=float, help="Коэффициент a")
+    parser.add_argument("b", type=float, help="Коэффициент b")
+    parser.add_argument("c", type=float, help="Коэффициент c")
+    args = parser.parse_args()
     
-    a = float(input("a = "))
-    b = float(input("b = "))
-    c = float(input("c = "))
-    
-    print(f"\nУравнение: {a}x² + {b}x + {c} = 0")
-    print(f"Ответ: {solve_quadratic(a, b, c)}")
+    print(f"Уравнение: {args.a}x² + {args.b}x + {args.c} = 0")
+    print(f"Ответ: {solve_quadratic(args.a, args.b, args.c)}")
