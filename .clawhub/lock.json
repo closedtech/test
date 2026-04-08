@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "self-improving-agent": {
+      "version": "3.0.13",
+      "installedAt": 1775590250992
+    },
+    "obsidian": {
+      "version": "1.0.0",
+      "installedAt": 1775590386993
+    },
+    "telegram-file-sender": {
+      "version": "1.0.3",
+      "installedAt": 1775591233480
+    }
+  }
+}
