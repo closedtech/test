@@ -301,3 +301,17 @@ class BigInt:
 
     def __pos__(self) -> "BigInt":
         return BigInt(self)
+
+    def sqrt(self) -> "BigInt":
+        """Целочисленный квадратный корень (floor sqrt)"""
+        if self < BigInt(0):
+            raise ValueError("sqrt от отрицательного числа")
+        if self == BigInt(0):
+            return BigInt(0)
+        
+        x = self
+        y = (x + BigInt(1)) // BigInt(2)
+        while y < x:
+            x = y
+            y = (x + self // x) // BigInt(2)
+        return x
