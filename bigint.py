@@ -170,7 +170,7 @@ class BigInt:
         else:
             result = BigInt(other)
             result._sign = "-" if self._sign == "" else ""
-            result._value = self._sub_abs(other._value)
+            result._value = other._sub_abs(self._value)
         return result
 
     def _sub_abs(self, b: str) -> str:
@@ -333,7 +333,7 @@ class BigInt:
         else:
             return "barrett"
 
-    # ----- School division O(n²) -----
+    # ----- School division O(n2) -----
     def _divide_school(self, a_str: str, b_str: str) -> tuple["BigInt", "BigInt"]:
         if int(b_str) == 0:
             raise ZeroDivisionError("division by zero")
@@ -377,6 +377,85 @@ class BigInt:
         ri._sign = ""
         return qi, ri
 
+    # ----- Newton-Raphson division O(n log n) -----
+    def _divide_newton(self, a_str: str, b_str: str) -> tuple["BigInt", "BigInt"]:
+        """Divide a by b using Newton-Raphson for reciprocal.
+        
+        Uses the Newton-Raphson method to compute q = a // b and r = a % b.
+        The key insight is that 1/b can be computed via Newton iteration on f(y) = 1/y - b.
+        
+        With proper scaling (R = base^M), y_n converges quadratically to R/b.
+        After convergence, q = a * y // R gives the quotient.
+        """
+        if int(b_str) == 0:
+            raise ZeroDivisionError("division by zero")
+
+        a_int = int(a_str)
+        b_int = int(b_str)
+
+        # Handle trivial case: |a| < |b|
+        if len(a_str) < len(b_str) or (len(a_str) == len(b_str) and a_str < b_str):
+            qi = BigInt.__new__(BigInt)
+            qi._value = "0"
+            qi._sign = ""
+            ri = BigInt.__new__(BigInt)
+            ri._value = a_str.lstrip("0") or "0"
+            ri._sign = ""
+            return qi, ri
+
+        # Normalize: shift b right until odd (for binary GCD-style optimization)
+        # This also determines the shift to apply back to remainder
+        shift = 0
+        b_norm = b_int
+        while b_norm % 2 == 0:
+            b_norm //= 2
+            shift += 1
+
+        # Use Python's native int for Newton-Raphson (fast C implementation)
+        # R = 10^(len(b) + len(a)) gives enough precision
+        # Actually use R = 10^(2 * len(b)) for safety
+        k = len(str(b_norm))
+        R = 10 ** (2 * k)
+
+        # Initial approximation y0 = R // b + 1 (always an overestimate)
+        y = R // b_norm + 1
+
+        # Newton iteration: y_{n+1} = y * (2R - b*y) // R
+        # This is derived from y_{n+1} = y * (2 - b*y) for finding 1/b,
+        # scaled by R to work with integers.
+        # Converges quadratically when y is close to R/b.
+        prev_y = 0
+        iterations = 0
+        while y != prev_y and iterations < 50:
+            prev_y = y
+            # y * (2R - b*y) can be very large, but Python handles big ints
+            y = y * (2 * R - b_norm * y) // R
+            iterations += 1
+
+        # y is now an approximation to R/b
+        # q_approx = a * y // R gives an approximation to a/b
+        q_approx = a_int * y // R
+
+        # Correct q_approx: compute remainder and adjust
+        q_big = BigInt(str(q_approx))
+        r = BigInt(a_str) - q_big * BigInt(b_str)
+        
+        # If remainder is negative, q was over-approximated
+        while r < BigInt(0):
+            q_big = q_big - BigInt(1)
+            r = r + BigInt(b_str)
+        
+        # If remainder >= b, q was under-approximated
+        while r >= BigInt(b_str):
+            q_big = q_big + BigInt(1)
+            r = r - BigInt(b_str)
+
+        # Apply shift back to remainder (reverse the normalization)
+        if shift > 0:
+            r = r * BigInt(2) ** shift
+
+        return q_big, r
+
     # ----- Burnikel-Ziegler O(n log n) -----
     @staticmethod
     def _digits_to_base(digits: list[int], base: int = 1000) -> str:
@@ -411,7 +490,7 @@ class BigInt:
     def _divide_burnikel(self, a_str: str, b_str: str) -> tuple["BigInt", "BigInt"]:
         """Burnikel-Ziegler division. Base 1000, recursive with school fallback.
 
-        Key guarantee: at most ONE recursive call per level — no branching explosion.
+        Key guarantee: at most ONE recursive call per level - no branching explosion.
         """
         n = max(len(a_str), len(b_str))
         # Base case: use school for small inputs
@@ -572,22 +651,26 @@ class BigInt:
         return qi, ri
 
     def _divmod(self, other: "BigInt") -> tuple["BigInt", "BigInt"]:
-        """Integer division and modulo: returns (quotient, remainder).
-        Chooses algorithm based on input size.
-        """
+        """Integer division and modulo: returns (quotient, remainder)."""
         if other._value == "0":
             raise ZeroDivisionError("division by zero")
 
         a_len = len(self._value)
         b_len = len(other._value)
-        algo = self._choose_division(a_len, b_len)
 
-        if algo == "school":
-            return self._divide_school(self._value, other._value)
-        elif algo == "burnikel":
-            return self._divide_burnikel(self._value, other._value)
+        # Choose algorithm based on input size
+        # Newton-Raphson: O(n log n) but higher constant
+        # School: O(n2) but lower constant for small n
+        if a_len >= 500 and b_len >= 10:
+            q, r = self._divide_newton(self._value, other._value)
         else:
-            return self._divide_barrett(self._value, other._value)
+            q, r = self._divide_school(self._value, other._value)
+
+        # Fix sign: quotient sign = XOR of signs
+        if self._sign != other._sign and q._value != "0":
+            q._sign = "-"
+
+        return q, r
 
     def __neg__(self) -> "BigInt":
         result = BigInt(self)
