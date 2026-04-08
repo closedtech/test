@@ -231,6 +231,10 @@ class BigInt:
         bi._sign = sign
         return bi
 
+    def __floordiv__(self, other: "int | BigInt") -> "BigInt":
+        other = self._ensure_bigint(other)
+        return self._divmod(other)[0]
+
     def __truediv__(self, other: "int | BigInt") -> "BigInt":
         other = self._ensure_bigint(other)
         return self._divmod(other)[0]
