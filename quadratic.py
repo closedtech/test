@@ -1,4 +1,5 @@
 import math
+import cmath
 
 def solve_quadratic(a, b, c):
     """Решает квадратное уравнение ax² + bx + c = 0"""
@@ -10,7 +11,10 @@ def solve_quadratic(a, b, c):
     discriminant = b**2 - 4*a*c
     
     if discriminant < 0:
-        return "Нет действительных решений"
+        # Комплексные корни
+        z1 = (-b + cmath.sqrt(discriminant)) / (2*a)
+        z2 = (-b - cmath.sqrt(discriminant)) / (2*a)
+        return f"Комплексные корни: x1 = {z1:.4f}, x2 = {z2:.4f}"
     elif discriminant == 0:
         x = -b / (2*a)
         return f"Одно решение: x = {x:.4f}"
