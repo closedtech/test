@@ -390,16 +390,20 @@ class BigInt:
         if int(b_str) == 0:
             raise ZeroDivisionError("division by zero")
 
-        a_int = int(a_str)
-        b_int = int(b_str)
+        # Work with absolute values — sign is handled by _divmod
+        a_str_abs = a_str.lstrip("-+")
+        b_str_abs = b_str.lstrip("-+")
+
+        a_int = int(a_str_abs)
+        b_int = int(b_str_abs)
 
         # Handle trivial case: |a| < |b|
-        if len(a_str) < len(b_str) or (len(a_str) == len(b_str) and a_str < b_str):
+        if len(a_str_abs) < len(b_str_abs) or (len(a_str_abs) == len(b_str_abs) and a_str_abs < b_str_abs):
             qi = BigInt.__new__(BigInt)
             qi._value = "0"
             qi._sign = ""
             ri = BigInt.__new__(BigInt)
-            ri._value = a_str.lstrip("0") or "0"
+            ri._value = a_str_abs.lstrip("0") or "0"
             ri._sign = ""
             return qi, ri
 
@@ -437,18 +441,18 @@ class BigInt:
         q_approx = a_int * y // R
 
         # Correct q_approx: compute remainder and adjust
-        q_big = BigInt(str(q_approx))
-        r = BigInt(a_str) - q_big * BigInt(b_str)
+        q_big = BigInt(str(abs(q_approx)))
+        r = BigInt(a_str_abs) - q_big * BigInt(b_str_abs)
         
         # If remainder is negative, q was over-approximated
         while r < BigInt(0):
             q_big = q_big - BigInt(1)
-            r = r + BigInt(b_str)
+            r = r + BigInt(b_str_abs)
         
         # If remainder >= b, q was under-approximated
-        while r >= BigInt(b_str):
+        while r >= BigInt(b_str_abs):
             q_big = q_big + BigInt(1)
-            r = r - BigInt(b_str)
+            r = r - BigInt(b_str_abs)
 
         # Apply shift back to remainder (reverse the normalization)
         if shift > 0:
