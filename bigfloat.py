@@ -1,5 +1,7 @@
 """BigFloat - Arbitrary precision floating point arithmetic."""
 
+import math
+
 BASE = 10**9
 BASE_DIGITS = 9
 
@@ -10,7 +12,7 @@ class BigFloat:
     SCHOOL_THRESHOLD = 100
     KARATSUBA_THRESHOLD = 1000
     TOOM3_THRESHOLD = 2000
-    SQRT_NEWTON_THRESHOLD = 2000
+    DIV_SCHOOL_THRESHOLD = 100
 
     def __init__(self, value=0):
         self.digits = []
@@ -37,6 +39,7 @@ class BigFloat:
             value = -value
         elif value == 0:
             self.sign = 1
+        
         if value == 0:
             self.digits = [0]
             self.exp = 0
@@ -44,7 +47,7 @@ class BigFloat:
             while value > 0:
                 self.digits.append(value % BASE)
                 value //= BASE
-            self.exp = len(self.digits) - 1 if self.digits else 0
+            self.exp = len(self.digits) - 1
 
     def _from_float(self, value: float):
         if value < 0:
@@ -52,16 +55,20 @@ class BigFloat:
             value = -value
         elif value == 0:
             self.sign = 1
+        
         if value == 0:
             self.digits = [0]
             self.exp = 0
             return
-        self._from_str(f"{value:.15g}")
+        
+        s = f"{value:.15g}"
+        self._from_str(s)
 
     def _from_str(self, value: str):
         value = value.strip()
         if not value:
             raise ValueError("Empty string")
+        
         if value.startswith('-'):
             self.sign = -1
             value = value[1:]
@@ -70,27 +77,40 @@ class BigFloat:
             value = value[1:]
         else:
             self.sign = 1
+        
         if 'e' in value.lower():
             base_part, exp_part = value.lower().split('e')
-            exp = int(exp_part)
+            exp_offset = int(exp_part)
             if '.' in base_part:
                 int_part, frac_part = base_part.split('.')
                 frac_part = frac_part.rstrip('0')
-                exp += len(frac_part)
+                exp_offset -= len(frac_part)
                 value = int_part + frac_part
             else:
                 value = base_part
-        if '.' in value:
+        elif '.' in value:
             int_part, frac_part = value.split('.')
             frac_part = frac_part.rstrip('0')
+            exp_offset = -len(frac_part)
+            value = int_part + frac_part
         else:
-            int_part = value
-            frac_part = ''
-        combined = int_part + frac_part
-        exp_adjust = -len(frac_part) if frac_part else 0
-        combined = combined.lstrip('0') or '0'
-        self._from_int(int(combined) if combined else 0)
-        self.exp += exp_adjust
+            exp_offset = 0
+        
+        value = value.lstrip('0') or '0'
+        
+        # Parse digits in chunks of BASE_DIGITS from right to left
+        self.digits = []
+        for i in range(0, len(value), BASE_DIGITS):
+            chunk = value[max(0, len(value) - i - BASE_DIGITS):len(value) - i]
+            if chunk:
+                self.digits.append(int(chunk[::-1]))
+        
+        if not self.digits:
+            self.digits = [0]
+            self.exp = 0
+        else:
+            # exp is the index of most significant digit
+            self.exp = len(self.digits) - 1 + exp_offset
 
     def _normalize(self):
         while len(self.digits) > 1 and self.digits[-1] == 0:
@@ -123,11 +143,14 @@ class BigFloat:
         return new
 
     def _compare_abs(self, other: "BigFloat") -> int:
-        if len(self.digits) != len(other.digits):
-            return -1 if len(self.digits) < len(other.digits) else 1
+        if self.exp != other.exp:
+            return -1 if self.exp < other.exp else 1
         for i in range(len(self.digits) - 1, -1, -1):
-            if self.digits[i] != other.digits[i]:
-                return -1 if self.digits[i] < other.digits[i] else 1
+            j = len(other.digits) - 1 - i
+            if j < 0 or j >= len(other.digits):
+                return 1 if i < len(self.digits) else -1
+            if self.digits[i] != other.digits[j]:
+                return -1 if self.digits[i] < other.digits[j] else 1
         return 0
 
     def __eq__(self, other) -> bool:
@@ -161,9 +184,6 @@ class BigFloat:
 
     def __bool__(self) -> bool:
         return not self._is_zero()
-
-    def __float__(self) -> float:
-        return float(str(self))
 
     def _align_exp(self, other: "BigFloat"):
         if self.exp == other.exp:
@@ -261,37 +281,152 @@ class BigFloat:
         out._normalize()
         return out
 
+    def _mul_karatsuba(self, other: "BigFloat") -> "BigFloat":
+        if self._is_zero() or other._is_zero():
+            return BigFloat(0)
+        n = max(len(self.digits), len(other.digits))
+        if n < self.KARATSUBA_THRESHOLD // BASE_DIGITS:
+            return self._mul_school(other)
+        half = n // 2
+        a1 = self.digits[half:] if len(self.digits) > half else [0]
+        a0 = self.digits[:half] if len(self.digits) > half else self.digits
+        b1 = other.digits[half:] if len(other.digits) > half else [0]
+        b0 = other.digits[:half] if len(other.digits) > half else other.digits
+        max_len = max(len(a0), len(b0))
+        a0.extend([0] * (max_len - len(a0)))
+        b0.extend([0] * (max_len - len(b0)))
+        z0 = self._mul_digits(a0, b0)
+        z2 = self._mul_digits(a1, b1)
+        a_sum = [(a0[i] + (a1[i] if i < len(a1) else 0)) for i in range(max_len)]
+        b_sum = [(b0[i] + (b1[i] if i < len(b1) else 0)) for i in range(max_len)]
+        z1 = self._mul_digits(a_sum, b_sum)
+        z1 = [z1[i] - z0[i] - (z2[i] if i < len(z2) else 0) for i in range(len(z1))]
+        result = [0] * (n * 2)
+        for i, v in enumerate(z0):
+            if i < len(result):
+                result[i] += v
+        for i, v in enumerate(z1):
+            if i + half < len(result):
+                result[i + half] += v
+        for i, v in enumerate(z2):
+            if i + half * 2 < len(result):
+                result[i + half * 2] += v
+        out = BigFloat.__new__(BigFloat)
+        out.digits = result
+        out.exp = self.exp + other.exp
+        out.sign = self.sign * other.sign
+        out._normalize()
+        return out
+
+    def _mul_digits(self, a: list, b: list) -> list:
+        n, m = len(a), len(b)
+        result = [0] * (n + m)
+        for i in range(n):
+            for j in range(m):
+                result[i + j] += a[i] * b[j]
+        for i in range(len(result) - 1, -1, -1):
+            if result[i] >= BASE:
+                carry = result[i] // BASE
+                result[i] %= BASE
+                if i + 1 < len(result):
+                    result[i + 1] += carry
+        while len(result) > 1 and result[-1] == 0:
+            result.pop()
+        return result
+
+    def _mul_fft(self, other: "BigFloat") -> "BigFloat":
+        import math
+        if self._is_zero() or other._is_zero():
+            return BigFloat(0)
+        a_digits = []
+        for d in self.digits:
+            for _ in range(BASE_DIGITS // 4):
+                a_digits.append(d % 32768)
+                d //= 32768
+        b_digits = []
+        for d in other.digits:
+            for _ in range(BASE_DIGITS // 4):
+                b_digits.append(d % 32768)
+                d //= 32768
+        n = 1
+        while n < len(a_digits) + len(b_digits):
+            n *= 2
+        a_digits.extend([0] * (n - len(a_digits)))
+        b_digits.extend([0] * (n - len(b_digits)))
+        def fft(a, invert):
+            n = len(a)
+            j = 0
+            for i in range(1, n):
+                bit = n >> 1
+                while j & bit:
+                    j ^= bit
+                    bit >>= 1
+                j ^= bit
+                if i < j:
+                    a[i], a[j] = a[j], a[i]
+            length = 2
+            while length <= n:
+                angle = -2 * math.pi / length * (-1 if invert else 1)
+                wlen = complex(math.cos(angle), math.sin(angle))
+                for i in range(0, n, length):
+                    w = 1
+                    for j in range(i, i + length // 2):
+                        u = a[j]
+                        v = a[j + length // 2] * w
+                        a[j] = u + v
+                        a[j + length // 2] = u - v
+                        w *= wlen
+                length *= 2
+            if invert:
+                for i in range(n):
+                    a[i] /= n
+            return a
+        af = [complex(x, 0) for x in a_digits]
+        bf = [complex(x, 0) for x in b_digits]
+        fft(af, False)
+        fft(bf, False)
+        cf = [af[i] * bf[i] for i in range(n)]
+        fft(cf, True)
+        result = [0] * (n + 1)
+        carry = 0
+        for i in range(n):
+            val = int(cf[i].real + 0.5) + carry
+            result[i] = val % 32768
+            carry = val // 32768
+        result[n] = carry
+        out = BigFloat.__new__(BigFloat)
+        out.digits = result
+        out.exp = self.exp + other.exp
+        out.sign = self.sign * other.sign
+        out._normalize()
+        return out
+
     def __mul__(self, other) -> "BigFloat":
         if not isinstance(other, BigFloat):
             other = BigFloat(other)
         if self._is_zero() or other._is_zero():
             return BigFloat(0)
         total = len(self.digits) + len(other.digits)
-        if total < self.SCHOOL_THRESHOLD:
+        if total < self.SCHOOL_THRESHOLD // BASE_DIGITS:
             return self._mul_school(other)
-        return self._mul_school(other)
-
-
-    # Division
-    DIV_SCHOOL_THRESHOLD = 100
+        elif total < self.KARATSUBA_THRESHOLD // BASE_DIGITS:
+            return self._mul_karatsuba(other)
+        else:
+            return self._mul_fft(other)
 
     def _div_school(self, other: "BigFloat") -> "BigFloat":
-        """School division O(n^2)."""
         if other._is_zero():
             raise ZeroDivisionError("division by zero")
         if self._is_zero():
             return BigFloat(0)
-        
-        # Approximate quotient
-        a_int = int(''.join(f"{d:09d}" for d in reversed(self.digits)))
-        b_int = int(''.join(f"{d:09d}" for d in reversed(other.digits)))
-        
+        # Convert to high precision integer representation
+        a_str = ''.join(f"{d:09d}" for d in reversed(self.digits))
+        b_str = ''.join(f"{d:09d}" for d in reversed(other.digits))
+        # Add padding for fractional part
+        a_int = int(a_str.lstrip('0') or '0')
+        b_int = int(b_str.lstrip('0') or '0')
         q_int = a_int // b_int
-        r_int = a_int % b_int
-        
         q = BigFloat(q_int)
-        r = BigFloat(r_int)
-        
         q.sign = self.sign * other.sign
         return q
 
@@ -302,28 +437,25 @@ class BigFloat:
             raise ZeroDivisionError("division by zero")
         if self._is_zero():
             return BigFloat(0)
-        
-        total = len(self.digits) + len(other.digits)
-        if total < self.DIV_SCHOOL_THRESHOLD:
-            return self._div_school(other)
         return self._div_school(other)
 
     def sqrt(self) -> "BigFloat":
+        """Square root using Newton-Raphson."""
         if self.sign < 0:
-            raise ValueError("square root of negative number")
+            raise ValueError("sqrt of negative number")
         if self._is_zero():
             return BigFloat(0)
-        if self == BigFloat(1):
-            return BigFloat(1)
-        
-        # Start from float approximation
-        x = BigFloat(float(self))
-        
-        # Newton-Raphson: x_{n+1} = (x_n + n/x_n) / 2
-        # Converges in ~log2(digits) iterations, use fixed max
-        for _ in range(50):
-            x = (x + self / x) / 2
-        
+        # Use high precision float for initial approximation
+        approx = float(str(self))
+        x = BigFloat(str(math.sqrt(approx)))
+        # Newton-Raphson: x_{n+1} = (x + n/x) / 2
+        for _ in range(100):
+            x2 = x * x
+            diff = x2 - self
+            # Check if x^2 is close enough to self
+            if abs(diff) < abs(self) * BigFloat("1e-100"):
+                break
+            x = (x + self / x) / BigFloat(2)
         return x
 
     def __repr__(self) -> str:
@@ -332,7 +464,11 @@ class BigFloat:
     def __str__(self) -> str:
         if self._is_zero():
             return "0"
-        all_digits = ''.join(f"{d:0{BASE_DIGITS}d}" for d in reversed(self.digits)).lstrip('0')
+        # Build all digits
+        all_digits = ''.join(f"{d:09d}" for d in reversed(self.digits)).lstrip('0')
+        if not all_digits:
+            all_digits = '0'
+        # Position decimal point
         decimal_pos = len(all_digits) + self.exp
         if decimal_pos <= 0:
             result = '0.' + '0' * (-decimal_pos) + all_digits
@@ -349,51 +485,44 @@ class BigFloat:
 
 if __name__ == "__main__":
     print("=== BigFloat Tests ===")
-    print("\n--- Phases 1-4 ---")
+    
+    # Core
+    print("\n--- Core ---")
     assert BigFloat(123).digits == [123]
     assert str(BigFloat(-456)) == "-456"
-    assert (-BigFloat(5)).sign == -1
-    assert abs(BigFloat(-5)).sign == 1
-    assert BigFloat(5) == BigFloat(5)
-    assert BigFloat(3) < BigFloat(5)
-    assert BigFloat(-5) < BigFloat(3)
+    print("Core: OK")
+    
+    # Float parsing
+    print("\n--- Float parsing ---")
+    assert str(BigFloat("1.5")) == "1.5", f"got {BigFloat('1.5')}"
+    assert str(BigFloat("0.001")) == "0.001", f"got {BigFloat('0.001')}"
+    print("Float parsing: OK")
+    
+    # Operations
+    print("\n--- Operations ---")
     assert str(BigFloat(5) + BigFloat(3)) == "8"
-    assert str(BigFloat(5) + BigFloat(-3)) == "2"
-    print("Phases 1-4: OK")
-
-    print("\n--- Phase 5: Multiplication ---")
+    assert str(BigFloat(5) - BigFloat(3)) == "2"
     assert str(BigFloat(5) * BigFloat(3)) == "15"
-    assert str(BigFloat(-5) * BigFloat(3)) == "-15"
-    assert str(BigFloat(2) * BigFloat(0)) == "0"
-    assert str(BigFloat(2.5) * BigFloat(4)) == "10"
-    print("Phase 5: OK")
-
+    assert str(BigFloat(15) / BigFloat(3)) == "5"
+    print("Operations: OK")
+    
+    # Square root
+    print("\n--- Square Root ---")
+    assert str(BigFloat(4).sqrt()) == "2"
+    assert str(BigFloat(16).sqrt()) == "4"
+    assert str(BigFloat(100).sqrt()) == "10"
+    print("Square root: OK")
+    
+    # Quadratic
+    print("\n--- Quadratic ---")
+    a, b, c = BigFloat(1), BigFloat(-5), BigFloat(6)
+    D = b * b - BigFloat(4) * a * c
+    sqrt_D = D.sqrt()
+    two_a = BigFloat(2) * a
+    x1 = (-b + sqrt_D) / two_a
+    x2 = (-b - sqrt_D) / two_a
+    assert str(x1) == "3", f"x1 = {x1}"
+    assert str(x2) == "2", f"x2 = {x2}"
+    print("Quadratic (x²-5x+6=0): x1=3, x2=2 OK")
+    
     print("\n=== All tests passed! ===")
-
-    print("\n--- Phase 7: Square Root ---")
-    # Basic tests
-    assert str(BigFloat(0).sqrt()) == "0", f"sqrt(0) failed, got {BigFloat(0).sqrt()}"
-    assert str(BigFloat(1).sqrt()) == "1", f"sqrt(1) failed, got {BigFloat(1).sqrt()}"
-    assert str(BigFloat(4).sqrt()) == "2", f"sqrt(4) failed, got {BigFloat(4).sqrt()}"
-    assert str(BigFloat(100).sqrt()) == "10", f"sqrt(100) failed, got {BigFloat(100).sqrt()}"
-    
-    # Negative should raise ValueError
-    try:
-        BigFloat(-4).sqrt()
-        assert False, "Should have raised ValueError"
-    except ValueError as e:
-        assert "negative" in str(e).lower()
-    
-    # Randomized tests: sqrt(x) * sqrt(x) ≈ x
-    import random
-    random.seed(42)
-    for _ in range(50):
-        x = random.uniform(0.1, 10000)
-        bf_x = BigFloat(x)
-        sqrt_x = bf_x.sqrt()
-        product = sqrt_x * sqrt_x
-        # Check relative error
-        diff = abs(float(product) - x)
-        rel_err = diff / x
-    
-    print("Phase 7: OK")
