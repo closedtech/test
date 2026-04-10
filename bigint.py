@@ -6,7 +6,10 @@ import math
 class BigInt:
     """Arbitrary precision integer using decimal string representation."""
 
-    FFT_THRESHOLD = 100  # Use FFT for numbers > 100 digits
+    # Multiplication thresholds (digit count)
+    SINGLE_DIGIT_THRESHOLD = 1
+    KARATSUBA_THRESHOLD = 100
+    FFT_THRESHOLD = 1000  # Use FFT for numbers > 1000 digits
     # Division thresholds (digit count)
     DIV_SCHOOL_THRESHOLD = 1000
     DIV_BURNIKEL_THRESHOLD = 10000
@@ -197,14 +200,136 @@ class BigInt:
     def __rmul__(self, other: "int") -> "BigInt":
         return self.__mul__(other)
 
+    def _split_at(self, pos: int) -> tuple["BigInt", "BigInt"]:
+        """Split number at digit position pos from right. Returns (high, low)."""
+        if pos <= 0:
+            return BigInt(0), BigInt(self._value)
+        if pos >= len(self._value):
+            return BigInt(self._value), BigInt(0)
+        high = self._value[:-pos]
+        low = self._value[-pos:]
+        hi = BigInt.__new__(BigInt)
+        hi._value = high.lstrip("0") or "0"
+        hi._sign = ""
+        lo = BigInt.__new__(BigInt)
+        lo._value = low
+        lo._sign = ""
+        return hi, lo
+
+    def _split_into_chunks(self, n: int) -> list["BigInt"]:
+        """Split number into n equal chunks from least significant digits."""
+        if n <= 0:
+            raise ValueError("n must be positive")
+        value = self._value
+        pad_len = (n - len(value) % n) % n
+        value = "0" * pad_len + value
+        chunk_len = len(value) // n
+        chunks = []
+        for i in range(n):
+            start = i * chunk_len
+            chunk_str = value[start:start + chunk_len]
+            chunk = BigInt.__new__(BigInt)
+            chunk._value = chunk_str
+            chunk._sign = ""
+            chunks.append(chunk)
+        return chunks
+
+    def _multiply_single(self, other: "BigInt") -> "BigInt":
+        """Multiply by single digit (O(n))."""
+        if len(other._value) == 1:
+            single_digit = int(other._value)
+            multiplier = self
+        else:
+            single_digit = int(self._value)
+            multiplier = other
+        if single_digit == 0:
+            return BigInt(0)
+        if single_digit == 1:
+            result = BigInt(multiplier)
+            result._sign = "-" if self._sign != other._sign else ""
+            return result
+        a = multiplier._value
+        result = [0] * (len(a) + 1)
+        carry = 0
+        for i in range(len(a) - 1, -1, -1):
+            mul = int(a[i]) * single_digit + carry
+            result[i + 1] = mul % 10
+            carry = mul // 10
+        if carry:
+            result[0] = carry
+        start = 0
+        while start < len(result) - 1 and result[start] == 0:
+            start += 1
+        value_str = "".join(str(d) for d in result[start:])
+        sign = "-" if self._sign != other._sign else ""
+        bi = BigInt.__new__(BigInt)
+        bi._value = value_str
+        bi._sign = sign
+        return bi
+
+    def _multiply_karatsuba(self, other: "BigInt") -> "BigInt":
+        """Karatsuba multiplication O(n^1.585)."""
+        if self._value == "0" or other._value == "0":
+            return BigInt(0)
+        a_len = len(self._value)
+        b_len = len(other._value)
+        if a_len < self.KARATSUBA_THRESHOLD or b_len < self.KARATSUBA_THRESHOLD:
+            return self._multiply_school(other)
+        
+        # Pad to same length (even split)
+        max_len = max(a_len, b_len)
+        if max_len % 2 == 1:
+            max_len += 1
+        
+        a_padded = self._value.zfill(max_len)
+        b_padded = other._value.zfill(max_len)
+        
+        m2 = max_len // 2
+        
+        # Split at midpoint
+        a1_str = a_padded[:m2]
+        a0_str = a_padded[m2:]
+        b1_str = b_padded[:m2]
+        b0_str = b_padded[m2:]
+        
+        a1 = BigInt(a1_str.lstrip("0") or "0")
+        a0 = BigInt(a0_str.lstrip("0") or "0")
+        b1 = BigInt(b1_str.lstrip("0") or "0")
+        b0 = BigInt(b0_str.lstrip("0") or "0")
+        
+        z0 = a0._multiply_karatsuba(b0)
+        z2 = a1._multiply_karatsuba(b1)
+        z1 = (a0 + a1)._multiply_karatsuba(b0 + b1) - z0 - z2
+        
+        result = z0 + (z1._shift_digits(m2)) + (z2._shift_digits(2 * m2))
+        result._sign = "-" if self._sign != other._sign else ""
+        return result
+
+    def _shift_digits(self, count: int) -> "BigInt":
+        """Shift number left by count decimal digits (multiply by 10^count)."""
+        if self._value == "0" or count == 0:
+            return BigInt(self)
+        result = BigInt.__new__(BigInt)
+        result._value = self._value + "0" * count
+        result._sign = self._sign
+        return result
+
     def _mul(self, other: "BigInt") -> "BigInt":
         if self._value == "0" or other._value == "0":
             return BigInt(0)
         a_len = len(self._value)
         b_len = len(other._value)
+        # Single digit multiplication (fast path)
+        if a_len <= self.SINGLE_DIGIT_THRESHOLD or b_len <= self.SINGLE_DIGIT_THRESHOLD:
+            return self._multiply_single(other)
+        # School for small numbers (faster than Karatsuba for small n)
+        if a_len < self.KARATSUBA_THRESHOLD and b_len < self.KARATSUBA_THRESHOLD:
+            return self._multiply_school(other)
+        # FFT for very large numbers
         if a_len + b_len > self.FFT_THRESHOLD:
             return self._multiply_fft(other)
-        return self._multiply_school(other)
+        # Karatsuba for medium numbers
+        return self._multiply_karatsuba(other)
 
     def _multiply_school(self, other: "BigInt") -> "BigInt":
         a = self._value
