@@ -267,6 +267,43 @@ class BigFloat:
             return self._mul_school(other)
         return self._mul_school(other)
 
+
+    # Division
+    DIV_SCHOOL_THRESHOLD = 100
+
+    def _div_school(self, other: "BigFloat") -> "BigFloat":
+        """School division O(n^2)."""
+        if other._is_zero():
+            raise ZeroDivisionError("division by zero")
+        if self._is_zero():
+            return BigFloat(0)
+        
+        # Approximate quotient
+        a_int = int(''.join(f"{d:09d}" for d in reversed(self.digits)))
+        b_int = int(''.join(f"{d:09d}" for d in reversed(other.digits)))
+        
+        q_int = a_int // b_int
+        r_int = a_int % b_int
+        
+        q = BigFloat(q_int)
+        r = BigFloat(r_int)
+        
+        q.sign = self.sign * other.sign
+        return q
+
+    def __truediv__(self, other) -> "BigFloat":
+        if not isinstance(other, BigFloat):
+            other = BigFloat(other)
+        if other._is_zero():
+            raise ZeroDivisionError("division by zero")
+        if self._is_zero():
+            return BigFloat(0)
+        
+        total = len(self.digits) + len(other.digits)
+        if total < self.DIV_SCHOOL_THRESHOLD:
+            return self._div_school(other)
+        return self._div_school(other)
+
     def __repr__(self) -> str:
         return f"BigFloat(digits={self.digits}, exp={self.exp}, sign={self.sign})"
 
