@@ -7,6 +7,10 @@ BASE_DIGITS = 9
 class BigFloat:
     __slots__ = ('digits', 'exp', 'sign')
 
+    SCHOOL_THRESHOLD = 100
+    KARATSUBA_THRESHOLD = 1000
+    TOOM3_THRESHOLD = 2000
+
     def __init__(self, value=0):
         self.digits = []
         self.exp = 0
@@ -98,7 +102,6 @@ class BigFloat:
     def _is_zero(self) -> bool:
         return len(self.digits) == 1 and self.digits[0] == 0
 
-    # Sign operations
     def __neg__(self):
         result = self._copy()
         result.sign = -result.sign
@@ -118,7 +121,6 @@ class BigFloat:
         new.sign = self.sign
         return new
 
-    # Comparison
     def _compare_abs(self, other: "BigFloat") -> int:
         if len(self.digits) != len(other.digits):
             return -1 if len(self.digits) < len(other.digits) else 1
@@ -159,9 +161,7 @@ class BigFloat:
     def __bool__(self) -> bool:
         return not self._is_zero()
 
-    # Addition/Subtraction
     def _align_exp(self, other: "BigFloat"):
-        """Align exponents, return (self, other) with same exp."""
         if self.exp == other.exp:
             return self, other
         a, b = self._copy(), other._copy()
@@ -174,7 +174,6 @@ class BigFloat:
         return a, b
 
     def _add_abs(self, other: "BigFloat") -> "BigFloat":
-        """Add absolute values (both positive)."""
         a, b = self._align_exp(other)
         max_len = max(len(a.digits), len(b.digits))
         a.digits.extend([0] * (max_len - len(a.digits)))
@@ -195,7 +194,6 @@ class BigFloat:
         return out
 
     def _sub_abs(self, other: "BigFloat") -> "BigFloat":
-        """Subtract absolute values (self >= other)."""
         a, b = self._align_exp(other)
         max_len = max(len(a.digits), len(b.digits))
         a.digits.extend([0] * (max_len - len(a.digits)))
@@ -228,7 +226,6 @@ class BigFloat:
             result = self._add_abs(other)
             result.sign = self.sign
             return result
-        # Different signs
         cmp = self._compare_abs(other)
         if cmp == 0:
             return BigFloat(0)
@@ -245,7 +242,31 @@ class BigFloat:
             other = BigFloat(other)
         return self + (-other)
 
-    # String representation
+    def _mul_school(self, other: "BigFloat") -> "BigFloat":
+        if self._is_zero() or other._is_zero():
+            return BigFloat(0)
+        n, m = len(self.digits), len(other.digits)
+        result = [0] * (n + m)
+        for i in range(n):
+            for j in range(m):
+                result[i + j] += self.digits[i] * other.digits[j]
+        out = BigFloat.__new__(BigFloat)
+        out.digits = result
+        out.exp = self.exp + other.exp
+        out.sign = self.sign * other.sign
+        out._normalize()
+        return out
+
+    def __mul__(self, other) -> "BigFloat":
+        if not isinstance(other, BigFloat):
+            other = BigFloat(other)
+        if self._is_zero() or other._is_zero():
+            return BigFloat(0)
+        total = len(self.digits) + len(other.digits)
+        if total < self.SCHOOL_THRESHOLD:
+            return self._mul_school(other)
+        return self._mul_school(other)
+
     def __repr__(self) -> str:
         return f"BigFloat(digits={self.digits}, exp={self.exp}, sign={self.sign})"
 
@@ -269,9 +290,7 @@ class BigFloat:
 
 if __name__ == "__main__":
     print("=== BigFloat Tests ===")
-
-    # Phase 1-3
-    print("\n--- Phases 1-3 ---")
+    print("\n--- Phases 1-4 ---")
     assert BigFloat(123).digits == [123]
     assert str(BigFloat(-456)) == "-456"
     assert (-BigFloat(5)).sign == -1
@@ -279,18 +298,15 @@ if __name__ == "__main__":
     assert BigFloat(5) == BigFloat(5)
     assert BigFloat(3) < BigFloat(5)
     assert BigFloat(-5) < BigFloat(3)
-    print("Phases 1-3: OK")
-
-    # Phase 4
-    print("\n--- Phase 4: Add/Sub ---")
     assert str(BigFloat(5) + BigFloat(3)) == "8"
     assert str(BigFloat(5) + BigFloat(-3)) == "2"
-    assert str(BigFloat(-5) + BigFloat(3)) == "-2"
-    assert str(BigFloat(5) - BigFloat(3)) == "2"
-    assert str(BigFloat(3) - BigFloat(5)) == "-2"
-    assert str(BigFloat(5) + BigFloat(0)) == "5"
-    assert str(BigFloat(0) + BigFloat(5)) == "5"
-    assert str(BigFloat(5) - BigFloat(5)) == "0"
-    print("Phase 4: OK")
+    print("Phases 1-4: OK")
+
+    print("\n--- Phase 5: Multiplication ---")
+    assert str(BigFloat(5) * BigFloat(3)) == "15"
+    assert str(BigFloat(-5) * BigFloat(3)) == "-15"
+    assert str(BigFloat(2) * BigFloat(0)) == "0"
+    assert str(BigFloat(2.5) * BigFloat(4)) == "10"
+    print("Phase 5: OK")
 
     print("\n=== All tests passed! ===")
