@@ -718,65 +718,114 @@ class BigInt:
 
     # ----- Barrett reduction O(n log n) -----
     def _divide_barrett(self, a_str: str, b_str: str) -> tuple["BigInt", "BigInt"]:
-        """Barrett reduction division.
-        mu = floor(B^(2k) / d), qhat = floor(a_high * mu / B^(k+1)).
+        """Barrett division O(n log n).
+        
+        Algorithm:
+        1. mu = B^(2n) / d  (precomputed)
+        2. q_hat = floor(a_high * mu / B^(n+1))
+        3. q = q_hat
+        4. r = a - q * d
+        5. Correct q and r
+        
+        Where B = 10, n = number of base-B digits in d
         """
         if int(b_str) == 0:
             raise ZeroDivisionError("division by zero")
 
-        if len(a_str) < len(b_str) or (len(a_str) == len(b_str) and a_str < b_str):
+        a_int = int(a_str)
+        b_int = int(b_str)
+
+        # Trivial case: |a| < |b|
+        if abs(a_int) < abs(b_int):
             qi = BigInt.__new__(BigInt)
             qi._value = "0"
             qi._sign = ""
             ri = BigInt.__new__(BigInt)
-            ri._value = a_str.lstrip("0") or "0"
-            ri._sign = ""
+            ri._value = str(abs(a_int))
+            ri._sign = "-" if a_int < 0 else ""
             return qi, ri
 
-        B = 1000
-        k = (len(b_str) + 2) // 3
-        if k < 1:
-            k = 1
+        # Let B = 10, k = number of digits in b
+        B = 10
+        k = len(b_str)
+        
+        # mu = B^(2k) / b
+        # For large b, this is huge, so we use the approximation:
+        # We work in chunks of size 3 (base 1000)
+        
+        # Split a and b into base-BASE digits
+        BASE = 1000
+        a_digits = [int(a_str[max(0, i):i+3][::-1]) for i in range(0, len(a_str), 3)][::-1]
+        b_digits = [int(b_str[max(0, i):i+3][::-1]) for i in range(0, len(b_str), 3)][::-1]
+        
+        n = len(b_digits)
+        m = len(a_digits) - n + 1
+        
+        if m <= 0:
+            qi = BigInt.__new__(BigInt)
+            qi._value = "0"
+            qi._sign = ""
+            ri = BigInt.__new__(BigInt)
+            ri._value = str(abs(a_int))
+            ri._sign = "-" if a_int < 0 else ""
+            return qi, ri
 
-        B_2k = B ** (2 * k)
-        a_int = int(a_str)
-        b_int = int(b_str)
-        mu_int = B_2k // b_int
+        # Compute mu = BASE^(2n) / b
+        # Using integer arithmetic
+        B_mu = BASE ** (2 * n)
+        mu_hat = B_mu // b_int
 
-        a_base = self._str_to_base(a_str)
-        na = len(a_base)
-
-        if na <= k + 1:
-            a_high_int = a_int // (B ** (max(0, na - k - 1) * 3))
+        # First approximation: use top m+1 digits of a
+        if len(a_digits) > n:
+            a_top = sum(a_digits[i] * (BASE ** (len(a_digits) - i - 1)) for i in range(len(a_digits) - n - 1))
         else:
-            shift = (na - k - 1)
-            a_high_int = a_int // (B ** (shift * 3))
-
-        qhat_int = (a_high_int * mu_int) // (B ** ((k + 1) * 3))
-
-        m = na
-        max_q = B ** m - 1
-        if qhat_int > max_q:
-            qhat_int = max_q
-
-        q_int = qhat_int
-        for _ in range(3):
-            qb = q_int * b_int
-            if qb > a_int:
+            a_top = sum(a_digits[i] * (BASE ** (len(a_digits) - i - 1)) for i in range(len(a_digits)))
+        
+        # q_hat = floor(a_top * mu_hat / BASE^(n+1))
+        q_hat = (a_top * mu_hat) // (BASE ** (n + 1))
+        
+        # Clamp to reasonable range
+        if q_hat > BASE ** (m + 2):
+            q_hat = BASE ** (m + 2)
+        
+        # Correct q using multiplication
+        q_int = q_hat
+        max_corrections = 5
+        
+        for _ in range(max_corrections):
+            # q * b
+            q_b = q_int * b_int
+            
+            if q_b > a_int:
                 q_int -= 1
+            elif q_b < a_int - b_int:
+                # Can we increase q?
+                room = (a_int - q_b) // b_int
+                if room > 0:
+                    q_int += min(room, BASE - 1)
+                else:
+                    break
             else:
-                while (q_int + 1) * b_int <= a_int:
-                    q_int += 1
                 break
-
+        
         r_int = a_int - q_int * b_int
+        
+        # Ensure remainder is in [0, b)
+        while r_int < 0:
+            q_int -= 1
+            r_int += b_int
+        
+        while r_int >= abs(b_int):
+            q_int += 1
+            r_int -= abs(b_int)
 
         qi = BigInt.__new__(BigInt)
         qi._value = str(q_int)
         qi._sign = ""
         ri = BigInt.__new__(BigInt)
-        ri._value = str(r_int).lstrip("0") or "0"
-        ri._sign = ""
+        ri._value = str(abs(r_int)).lstrip("0") or "0"
+        ri._sign = "-" if a_int < 0 else ""
+        
         return qi, ri
 
     def _divmod(self, other: "BigInt") -> tuple["BigInt", "BigInt"]:
