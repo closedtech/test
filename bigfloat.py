@@ -10,6 +10,7 @@ class BigFloat:
     SCHOOL_THRESHOLD = 100
     KARATSUBA_THRESHOLD = 1000
     TOOM3_THRESHOLD = 2000
+    SQRT_NEWTON_THRESHOLD = 2000
 
     def __init__(self, value=0):
         self.digits = []
@@ -161,6 +162,9 @@ class BigFloat:
     def __bool__(self) -> bool:
         return not self._is_zero()
 
+    def __float__(self) -> float:
+        return float(str(self))
+
     def _align_exp(self, other: "BigFloat"):
         if self.exp == other.exp:
             return self, other
@@ -304,6 +308,27 @@ class BigFloat:
             return self._div_school(other)
         return self._div_school(other)
 
+    def sqrt(self) -> "BigFloat":
+        if self.sign < 0:
+            raise ValueError("square root of negative number")
+        if self._is_zero():
+            return BigFloat(0)
+        if self == BigFloat(1):
+            return BigFloat(1)
+        
+        # Start from float approximation
+        x = BigFloat(float(self))
+        
+        # Newton-Raphson: x_{n+1} = (x_n + n/x_n) / 2
+        while True:
+            x_squared = x * x
+            diff = x_squared - self
+            if abs(diff) < BigFloat(1e-10):
+                break
+            x = (x + self / x) / 2
+        
+        return x
+
     def __repr__(self) -> str:
         return f"BigFloat(digits={self.digits}, exp={self.exp}, sign={self.sign})"
 
@@ -347,3 +372,32 @@ if __name__ == "__main__":
     print("Phase 5: OK")
 
     print("\n=== All tests passed! ===")
+
+    print("\n--- Phase 7: Square Root ---")
+    # Basic tests
+    assert str(BigFloat(0).sqrt()) == "0", f"sqrt(0) failed, got {BigFloat(0).sqrt()}"
+    assert str(BigFloat(1).sqrt()) == "1", f"sqrt(1) failed, got {BigFloat(1).sqrt()}"
+    assert str(BigFloat(4).sqrt()) == "2", f"sqrt(4) failed, got {BigFloat(4).sqrt()}"
+    assert str(BigFloat(100).sqrt()) == "10", f"sqrt(100) failed, got {BigFloat(100).sqrt()}"
+    
+    # Negative should raise ValueError
+    try:
+        BigFloat(-4).sqrt()
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "negative" in str(e).lower()
+    
+    # Randomized tests: sqrt(x) * sqrt(x) ≈ x
+    import random
+    random.seed(42)
+    for _ in range(50):
+        x = random.uniform(0.1, 10000)
+        bf_x = BigFloat(x)
+        sqrt_x = bf_x.sqrt()
+        product = sqrt_x * sqrt_x
+        # Check relative error
+        diff = abs(float(product) - x)
+        rel_err = diff / x
+        assert rel_err < 1e-6, f"sqrt({x})^2 failed: rel_err={rel_err}, product={float(product)}"
+    
+    print("Phase 7: OK")
