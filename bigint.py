@@ -450,13 +450,14 @@ class BigInt:
         return other._divmod(self)[1]
 
     def _choose_division(self, a_len: int, b_len: int) -> str:
+        # Use the larger of dividend/divisor length for complexity
         n = max(a_len, b_len)
         if n < self.DIV_SCHOOL_THRESHOLD:
             return "school"
         elif n <= self.DIV_BURNIKEL_THRESHOLD:
             return "burnikel"
         else:
-            return "barrett"
+            return "newton"  # Newton best for very large numbers
 
     # ----- School division O(n2) -----
     def _divide_school(self, a_str: str, b_str: str) -> tuple["BigInt", "BigInt"]:
@@ -532,22 +533,14 @@ class BigInt:
             ri._sign = ""
             return qi, ri
 
-        # Normalize: shift b right until odd (for binary GCD-style optimization)
-        # This also determines the shift to apply back to remainder
-        shift = 0
-        b_norm = b_int
-        while b_norm % 2 == 0:
-            b_norm //= 2
-            shift += 1
-
         # Use Python's native int for Newton-Raphson (fast C implementation)
         # R = 10^(len(b) + len(a)) gives enough precision
         # Actually use R = 10^(2 * len(b)) for safety
-        k = len(str(b_norm))
+        k = len(str(b_int))
         R = 10 ** (2 * k)
 
         # Initial approximation y0 = R // b + 1 (always an overestimate)
-        y = R // b_norm + 1
+        y = R // b_int + 1
 
         # Newton iteration: y_{n+1} = y * (2R - b*y) // R
         # This is derived from y_{n+1} = y * (2 - b*y) for finding 1/b,
@@ -558,7 +551,7 @@ class BigInt:
         while y != prev_y and iterations < 50:
             prev_y = y
             # y * (2R - b*y) can be very large, but Python handles big ints
-            y = y * (2 * R - b_norm * y) // R
+            y = y * (2 * R - b_int * y) // R
             iterations += 1
 
         # y is now an approximation to R/b
@@ -568,20 +561,16 @@ class BigInt:
         # Correct q_approx: compute remainder and adjust
         q_big = BigInt(str(abs(q_approx)))
         r = BigInt(a_str_abs) - q_big * BigInt(b_str_abs)
-        
+
         # If remainder is negative, q was over-approximated
         while r < BigInt(0):
             q_big = q_big - BigInt(1)
             r = r + BigInt(b_str_abs)
-        
+
         # If remainder >= b, q was under-approximated
         while r >= BigInt(b_str_abs):
             q_big = q_big + BigInt(1)
             r = r - BigInt(b_str_abs)
-
-        # Apply shift back to remainder (reverse the normalization)
-        if shift > 0:
-            r = r * BigInt(2) ** shift
 
         return q_big, r
 
@@ -620,6 +609,8 @@ class BigInt:
         """Burnikel-Ziegler division. Base 1000, recursive with school fallback.
 
         Key guarantee: at most ONE recursive call per level - no branching explosion.
+        The algorithm splits a and b into j-word blocks where j = ceil(n_b / 2),
+        then recursively divides the top blocks.
         """
         n = max(len(a_str), len(b_str))
         # Base case: use school for small inputs
@@ -648,71 +639,113 @@ class BigInt:
 
         n_a = len(a_base)
         n_b = len(b_base)
-        m = (max(n_a, n_b) + 2) // 3
-        if m < 1:
-            m = 1
 
-        # Pad to 3*m words
-        while len(a_base) < 3 * m:
-            a_base.append(0)
-        while len(b_base) < 3 * m:
-            b_base.append(0)
-
-        # Split a = a2*B^(2m) + a1*B^m + a0
-        a2 = a_base[2*m:3*m]
-        b2 = b_base[2*m:3*m]
-
-        a2_str = self._digits_to_base(a2).lstrip("0") or "0"
-        b2_str = self._digits_to_base(b2).lstrip("0") or "0"
-        b1_str = self._digits_to_base(b_base[m:2*m]).lstrip("0") or "0"
-
-        # Handle leading zero word in b
-        if b2_str == "0" or len(b2_str) == 0:
-            b2_str = b1_str
-            if b2_str == "0":
-                return self._divide_school(a_str, b_str)
-
-        # Check if recursive division makes sense
-        cmp_a2_b2 = (len(a2_str) > len(b2_str)) or (len(a2_str) == len(b2_str) and a2_str >= b2_str)
-        if not cmp_a2_b2 or len(a2_str) < 2 * len(b2_str):
-            # a2 < b2 or a2 not much bigger: recursion won't reduce enough
+        # Burnikel-Ziegler requires n_b >= 2 for the recursive split to work
+        # With n_b = 1, we don't have enough words for the 3-way split
+        if n_b < 2:
             return self._divide_school(a_str, b_str)
 
-        # Step 1: q1 = floor(a2 / b2), r1 = a - q1*b
-        a_big = BigInt(a_str)
-        b_big = BigInt(b_str)
-        q1_big, _ = self._divide_burnikel(a2_str, b2_str)
+        # j = ceil(n_b / 2) is the block size for the decomposition
+        # a = a2*B^(2j) + a1*B^j + a0
+        # b = b1*B^j + b0
+        j = (n_b + 1) // 2  # ceil(n_b / 2)
+        if j < 1:
+            j = 1
+
+        # Extract the top 2j words of a (these form a2 and a1)
+        # a2 = top j words, a1 = next j words
+        # Position from the end since a_base is little-endian
+        a2_words = a_base[max(0, n_a - 2*j):n_a - j] if n_a >= j else []
+        a1_words = a_base[n_a - j:n_a] if n_a >= j else a_base[:n_a]
+        a0_words = a_base[:max(0, n_a - 2*j)] if n_a >= 2*j else []
+
+        # b1 = top j words of b (b2 in standard notation)
+        b1_words = b_base[max(0, n_b - j):n_b] if n_b >= j else []
+        b0_words = b_base[:max(0, n_b - j)] if n_b >= j else b_base[:n_b]
+
+        # Convert to strings
+        a2_str = self._digits_to_base(a2_words).lstrip("0") or "0"
+        a1_str = self._digits_to_base(a1_words).lstrip("0") or "0"
+        b1_str = self._digits_to_base(b1_words).lstrip("0") or "0"
+        b0_str = self._digits_to_base(b0_words).lstrip("0") or "0"
+
+        # Handle empty or zero top word
+        if a2_str == "0" or a2_str == "":
+            return self._divide_school(a_str, b_str)
+
+        if b1_str == "0" or b1_str == "":
+            return self._divide_school(a_str, b_str)
+
+        # The top word of a2 must be larger than top word of b1 for efficient recursion
+        # Check: top_word(a2) >= 2 * top_word(b1)
+        # In decimal: if len(a2_str) > len(b1_str), then top_word condition likely satisfied
+        # If same length, compare values
+        a2_len = len(a2_str)
+        b1_len = len(b1_str)
+
+        if a2_len < b1_len or (a2_len == b1_len and a2_str < b1_str):
+            return self._divide_school(a_str, b_str)
+
+        # Step 1: q1 = floor(a2 / b1), r1 = a2 - q1*b1
+        # Use Burnikel recursively for this
+        q1_big, _ = self._divide_burnikel(a2_str, b1_str)
         q1_str = q1_big._value.lstrip("0") or "0"
 
         if q1_str == "0":
             return self._divide_school(a_str, b_str)
 
+        # Compute r1 = a2 - q1*b1 using BigInt
         q1_big_int = BigInt(q1_str)
-        r1_big = a_big - q1_big_int * b_big
-
+        b1_big = BigInt(b1_str)
+        r1_big = BigInt(a2_str) - q1_big_int * b1_big
         r1_str = r1_big._value.lstrip("0") or "0"
         if r1_str == "":
             r1_str = "0"
 
-        # If r1 didn't shrink enough, fall back
-        if len(r1_str) >= len(a_str):
-            return self._divide_school(a_str, b_str)
+        # Step 2: Compute (r1*B^j + a1) / b
+        # r1_shifted = r1 * B^j
+        r1_shifted = r1_str + "0" * (3 * j)  # Each base-1000 word = 3 decimal digits
+        # But we need to add a1 at the correct position
+        # r1*B^j + a1 means concatenating a1 at the lower position
+        r1_plus_a1 = self._str_to_base(r1_shifted)
+        a1_base = self._str_to_base(a1_str)
+        # Pad a1 to j words
+        while len(a1_base) < j:
+            a1_base.append(0)
+        # Add a1 to r1_shifted at the lower j positions
+        carry = 0
+        for idx in range(len(a1_base)):
+            pos = idx
+            if pos < len(r1_plus_a1):
+                sum_val = r1_plus_a1[pos] + a1_base[idx] + carry
+            else:
+                sum_val = a1_base[idx] + carry
+            r1_plus_a1[pos] = sum_val % 1000
+            carry = sum_val // 1000
+        if carry:
+            r1_plus_a1.append(carry)
 
-        # Step 2: q2 = floor(r1 / b), r = r1 - q2*b
-        # Always use school for guaranteed O(1) depth at this level
-        q2_big, r2_big = self._divide_school(r1_str, b_str)
+        # Convert back to string and divide by b using school
+        r1_plus_a1_str = self._digits_to_base(r1_plus_a1).lstrip("0") or "0"
 
-        # Final quotient: q = q1*B^m + q2
-        B_m = 1000 ** m
+        # Step 3: q2 = floor((r1*B^j + a1) / b), r2 = (r1*B^j + a1) - q2*b
+        q2_big, r2_big = self._divide_school(r1_plus_a1_str, b_str)
+
+        # Step 4: Final quotient q = q1 * B^j + q2
+        B_j = 1000 ** j
         q1_int = int(q1_str)
         q2_int = int(q2_big._value.lstrip("0") or "0")
-        q_int = q1_int * B_m + q2_int
+        q_int = q1_int * B_j + q2_int
+
+        # Remainder from step 2 needs to be converted back
+        # r2 is already in the correct form (it's the remainder of (r1*B^j + a1) / b)
+        ri_str = r2_big._value.lstrip("0") or "0"
 
         qi = BigInt.__new__(BigInt)
         qi._value = str(q_int)
         qi._sign = ""
         ri = BigInt.__new__(BigInt)
-        ri._value = r2_big._value.lstrip("0") or "0"
+        ri._value = ri_str
         ri._sign = ""
         return qi, ri
 
@@ -829,31 +862,50 @@ class BigInt:
         return qi, ri
 
     def _divmod(self, other: "BigInt") -> tuple["BigInt", "BigInt"]:
-        """Integer division and modulo: returns (quotient, remainder)."""
+        """Integer division and modulo: returns (quotient, remainder).
+        
+        Python semantics: a = b*(a//b) + (a%b), 0 <= r < |b| for positive b
+        """
         if other._value == "0":
             raise ZeroDivisionError("division by zero")
 
-        a_len = len(self._value)
-        b_len = len(other._value)
-
-        # Choose algorithm based on input size
-        # Newton-Raphson: O(n log n) but higher constant
-        # School: O(n2) but lower constant for small n
-        if a_len >= 500 and b_len >= 10:
-            q, r = self._divide_newton(self._value, other._value)
-        else:
-            q, r = self._divide_school(self._value, other._value)
-
-        # Fix sign: quotient sign = XOR of signs
-        if self._sign != other._sign and q._value != "0":
-            q._sign = "-"
+        a_abs = int(self._value.lstrip("-"))
+        b_abs = int(other._value.lstrip("-"))
+        
+        a_neg = self._sign == "-"
+        b_neg = other._sign == "-"
+        
+        # Floor division
+        q_abs = a_abs // b_abs
+        r_abs = a_abs % b_abs
+        
+        # Floor rule: when signs differ and r != 0, q is more negative
+        if a_neg != b_neg and r_abs != 0:
+            q_abs = -(q_abs + 1)
+            r_abs = b_abs - r_abs
+        
+        # Quotient sign
+        q_sign = "-" if ((a_neg != b_neg and r_abs != 0) or (a_neg and b_neg)) else ""
+        if a_neg and not b_neg:
+            q_sign = "-"
+        elif not a_neg and b_neg:
+            q_sign = "-"
+        
+        q = BigInt.__new__(BigInt)
+        q._value = str(abs(q_abs))
+        q._sign = q_sign
+        
+        # Remainder: sign follows divisor when divisor negative, else positive
+        # For floor division: 0 <= r < |b|
+        r = BigInt.__new__(BigInt)
+        r._value = str(r_abs)
+        r._sign = ""  # floor division: remainder always non-negative
 
         return q, r
-
     def __neg__(self) -> "BigInt":
-        result = BigInt(self)
-        if result._value != "0":
-            result._sign = "-" if result._sign == "" else ""
+        result = BigInt.__new__(BigInt)
+        result._value = self._value
+        result._sign = "-" if self._sign == "" else ""
         return result
 
     def __pos__(self) -> "BigInt":
