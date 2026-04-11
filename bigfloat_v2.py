@@ -586,9 +586,10 @@ class BigFloat:
     
     def _div_school(self, other: "BigFloat") -> "BigFloat":
         """School division O(n²). Для малых и средних чисел."""
-        # Всегда работаем с дробной частью
-        # Используем фиксированную точность
-        scale = 15  # 15 decimal places
+        # scale должен быть достаточным для делителя
+        # Для 1/222...222 нужно scale >= len(divisor) чтобы получить значащие цифры
+        other_len = len(str(other).lstrip('-0').replace('.', ''))
+        scale = max(15, other_len)
         
         # Получаем строковые представления
         a_str = str(self)
@@ -677,7 +678,16 @@ class BigFloat:
         b_dot = str(other).find('.')
         a_decimals = len(str(self)) - a_dot - 1 if a_dot >= 0 else 0
         b_decimals = len(str(other)) - b_dot - 1 if b_dot >= 0 else 0
-        result_decimals = max(a_decimals, b_decimals) + 5  # sedikit extra
+        # Расчёт decimal places для результата деления
+        # result_decimals = количество цифр после десятичной точки в результате
+        # Для a/b: если len_b > len_a, то результат < 1 и нужен сдвиг
+        len_a = len(a_str.lstrip('0')) if a_str.lstrip('0') else 0
+        len_b = len(b_str.lstrip('0')) if b_str.lstrip('0') else 0
+        # Базовый сдвиг: len_b - len_a (для правильного количества нулей после точки)
+        base_shift = max(0, len_b - len_a)
+        # Precision влияет только на дробную часть, не на сдвиг
+        precision = min(max(self.max_digits, other.max_digits, 10), 1000)
+        result_decimals = base_shift + precision
         
         # Парсим в int (избегаем scientific notation)
         try:
